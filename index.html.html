@@ -1,0 +1,604 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Binary Journal • Pro</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.6.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <style>
+        body { font-family: 'Inter', system-ui, sans-serif; }
+        .tab-active { border-bottom: 4px solid #10b981; color: #10b981; font-weight: 600; }
+        .modal { animation: pop 0.3s ease; }
+        @keyframes pop { from { transform: scale(0.95); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+        .loading-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.75); display: flex; align-items: center; justify-content: center; z-index: 100; }
+        .spinner { width: 48px; height: 48px; border: 4px solid #27272a; border-top-color: #10b981; border-radius: 50%; animation: spin 0.8s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .toast { position: fixed; bottom: 2rem; right: 2rem; z-index: 200; padding: 1rem 1.5rem; border-radius: 1rem; font-weight: 500; animation: slideIn 0.3s ease; }
+        @keyframes slideIn { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+    </style>
+</head>
+<body class="bg-zinc-950 text-zinc-100 min-h-screen">
+
+<!-- Loading Overlay -->
+<div id="loadingOverlay" class="loading-overlay">
+    <div class="text-center">
+        <div class="spinner mx-auto mb-4"></div>
+        <div class="text-zinc-300 text-lg" id="loadingText">Connecting to database...</div>
+    </div>
+</div>
+
+<div class="max-w-7xl mx-auto px-4 py-8">
+    <!-- Header -->
+    <div class="flex justify-between items-center mb-10">
+        <div>
+            <h1 class="text-5xl font-bold tracking-tight flex items-center gap-4">
+                <span class="text-emerald-500">📊</span> Binary Journal Pro
+            </h1>
+            <p class="text-zinc-400 mt-1 flex items-center gap-2">
+                Professional • Cloud Sync •
+                <span id="dbStatus" class="flex items-center gap-2 text-yellow-400 font-medium">
+                    <span class="w-2 h-2 rounded-full bg-yellow-400 inline-block animate-pulse"></span> Connecting...
+                </span>
+            </p>
+        </div>
+        <div class="text-emerald-400 font-mono text-xl" id="tradeCount">0 trades</div>
+    </div>
+
+    <!-- Tabs -->
+    <div class="flex border-b border-zinc-800 mb-8 text-lg">
+        <button data-tab="0" class="tab px-8 py-4 tab-active">Dashboard</button>
+        <button data-tab="1" class="tab px-8 py-4">All Trades</button>
+        <button data-tab="2" class="tab px-8 py-4">+ New Trade</button>
+    </div>
+
+    <!-- DASHBOARD -->
+    <div id="content-0" class="tab-content">
+        <div class="grid grid-cols-2 md:grid-cols-5 gap-6 mb-8">
+            <div class="bg-zinc-900 border border-zinc-800 rounded-3xl p-7">
+                <div class="text-zinc-400">Total Trades</div>
+                <div id="stat-total" class="text-5xl font-bold mt-3">0</div>
+            </div>
+            <div class="bg-zinc-900 border border-zinc-800 rounded-3xl p-7">
+                <div class="text-zinc-400">Win Rate</div>
+                <div id="stat-winrate" class="text-5xl font-bold mt-3 text-emerald-400">0%</div>
+            </div>
+            <div class="bg-zinc-900 border border-zinc-800 rounded-3xl p-7">
+                <div class="text-zinc-400">Net P/L</div>
+                <div id="stat-pl" class="text-5xl font-bold mt-3">$0.00</div>
+            </div>
+            <div class="bg-zinc-900 border border-zinc-800 rounded-3xl p-7">
+                <div class="text-zinc-400">Avg Duration</div>
+                <div id="stat-avg" class="text-5xl font-bold mt-3">0 min</div>
+            </div>
+            <div class="bg-zinc-900 border border-zinc-800 rounded-3xl p-7">
+                <div class="text-zinc-400">Current Balance</div>
+                <div id="stat-balance" class="text-5xl font-bold mt-3">$0.00</div>
+            </div>
+        </div>
+        <div class="grid md:grid-cols-2 gap-6">
+            <div class="bg-zinc-900 border border-zinc-800 rounded-3xl p-6">
+                <h3 class="font-semibold mb-4">Cumulative P/L</h3>
+                <canvas id="cumulativeChart" height="140"></canvas>
+            </div>
+            <div class="bg-zinc-900 border border-zinc-800 rounded-3xl p-6">
+                <h3 class="font-semibold mb-4">Win / Loss Breakdown</h3>
+                <canvas id="pieChart" height="140"></canvas>
+            </div>
+        </div>
+        <div class="mt-6 bg-zinc-900 border border-zinc-800 rounded-3xl p-6">
+            <h3 class="font-semibold mb-4">Trades by Market Session</h3>
+            <canvas id="sessionChart" height="110"></canvas>
+        </div>
+    </div>
+
+    <!-- ALL TRADES -->
+    <div id="content-1" class="tab-content hidden">
+        <div class="flex flex-wrap gap-4 mb-6">
+            <input id="search" type="text" placeholder="Search asset or ID..." class="flex-1 bg-zinc-900 border border-zinc-700 rounded-2xl px-5 py-3 focus:border-emerald-500 outline-none" onkeyup="renderTrades()">
+            <button onclick="exportCSV()" class="bg-emerald-600 hover:bg-emerald-500 px-6 py-3 rounded-2xl font-medium flex items-center gap-2"><i class="fas fa-download"></i> Export CSV</button>
+            <button onclick="clearAllTrades()" class="bg-red-600 hover:bg-red-500 px-6 py-3 rounded-2xl font-medium flex items-center gap-2"><i class="fas fa-trash"></i> Clear All</button>
+        </div>
+        <div class="overflow-x-auto rounded-3xl border border-zinc-800 bg-zinc-900">
+            <table class="w-full text-sm">
+                <thead class="bg-zinc-800 sticky top-0">
+                    <tr>
+                        <th class="p-5 text-left">ID</th>
+                        <th class="p-5 text-left">Date & Time</th>
+                        <th class="p-5 text-left">Asset</th>
+                        <th class="p-5 text-left">Direction</th>
+                        <th class="p-5 text-left">Expiry</th>
+                        <th class="p-5 text-left">Result</th>
+                        <th class="p-5 text-right">P/L</th>
+                        <th class="p-5 text-right">Balance</th>
+                        <th class="p-5 text-left">Session</th>
+                        <th class="p-5 w-32">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="tableBody" class="divide-y divide-zinc-800"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- NEW / EDIT TRADE -->
+    <div id="content-2" class="tab-content hidden">
+        <form id="tradeForm" class="bg-zinc-900 border border-zinc-800 rounded-3xl p-10 max-w-5xl mx-auto">
+            <input type="hidden" id="editId">
+            <h3 class="text-emerald-400 text-xl font-semibold mb-6 flex items-center gap-3"><span class="text-2xl">1️⃣</span> Trade Details</h3>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div><label class="block text-xs text-zinc-400 mb-1">Opened Date & Time</label><input type="datetime-local" id="opened" required class="w-full bg-zinc-800 border border-zinc-700 rounded-2xl px-5 py-3"></div>
+                <div><label class="block text-xs text-zinc-400 mb-1">Expiry (minutes)</label><input type="number" id="expiry" min="1" value="5" required class="w-full bg-zinc-800 border border-zinc-700 rounded-2xl px-5 py-3"></div>
+                <div><label class="block text-xs text-zinc-400 mb-1">Asset / Symbol</label><input type="text" id="asset" placeholder="EUR/USD" required class="w-full bg-zinc-800 border border-zinc-700 rounded-2xl px-5 py-3 uppercase"></div>
+                <div><label class="block text-xs text-zinc-400 mb-1">Direction</label>
+                    <select id="direction" class="w-full bg-zinc-800 border border-zinc-700 rounded-2xl px-5 py-3">
+                        <option value="Call">Call (UP)</option>
+                        <option value="Put">Put (DOWN)</option>
+                    </select>
+                </div>
+                <div><label class="block text-xs text-zinc-400 mb-1">Market Session</label>
+                    <select id="session" class="w-full bg-zinc-800 border border-zinc-700 rounded-2xl px-5 py-3">
+                        <option value="Asian">Asian (Tokyo)</option>
+                        <option value="London">London</option>
+                        <option value="New York">New York</option>
+                        <option value="Sydney">Sydney</option>
+                        <option value="Other">Other</option>
+                    </select>
+                </div>
+            </div>
+
+            <div id="startingBalanceSection" class="mt-8" style="display:none;">
+                <label class="block text-sm text-zinc-300 mb-2 font-medium">Starting Account Balance ($)</label>
+                <input type="number" step="0.01" id="startingBalance" placeholder="e.g. 1000" class="w-full max-w-md bg-zinc-800 border border-zinc-700 rounded-2xl px-5 py-3">
+                <p class="text-xs text-zinc-500 mt-1">Only needed once — will be used as base for running balance</p>
+            </div>
+
+            <h3 class="text-emerald-400 text-xl font-semibold mt-10 mb-6 flex items-center gap-3"><span class="text-2xl">2️⃣</span> Trade Metrics</h3>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div><label class="block text-xs text-zinc-400 mb-1">Entry Price</label><input type="number" step="0.00001" id="entry" class="w-full bg-zinc-800 border border-zinc-700 rounded-2xl px-5 py-3"></div>
+                <div><label class="block text-xs text-zinc-400 mb-1">Exit / Outcome Price</label><input type="number" step="0.00001" id="exit" class="w-full bg-zinc-800 border border-zinc-700 rounded-2xl px-5 py-3"></div>
+                <div><label class="block text-xs text-zinc-400 mb-1">Investment ($)</label><input type="number" step="0.01" id="investment" required class="w-full bg-zinc-800 border border-zinc-700 rounded-2xl px-5 py-3"></div>
+                <div><label class="block text-xs text-zinc-400 mb-1">Payout %</label><input type="number" step="0.1" value="80" id="payout" class="w-full bg-zinc-800 border border-zinc-700 rounded-2xl px-5 py-3"></div>
+                <div><label class="block text-xs text-zinc-400 mb-1">Result</label>
+                    <select id="result" class="w-full bg-zinc-800 border border-zinc-700 rounded-2xl px-5 py-3">
+                        <option value="Win">Win</option>
+                        <option value="Loss">Loss</option>
+                        <option value="Tie">Tie</option>
+                    </select>
+                </div>
+                <div><label class="block text-xs text-zinc-400 mb-1">Fees / Spread ($)</label><input type="number" step="0.01" value="0" id="fees" class="w-full bg-zinc-800 border border-zinc-700 rounded-2xl px-5 py-3"></div>
+            </div>
+
+            <h3 class="text-emerald-400 text-xl font-semibold mt-10 mb-6 flex items-center gap-3"><span class="text-2xl">3️⃣</span> Strategy & Signals</h3>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div><label class="block text-xs text-zinc-400 mb-1">Strategy Used</label><input type="text" id="strategy" placeholder="Pin Bar Reversal" class="w-full bg-zinc-800 border border-zinc-700 rounded-2xl px-5 py-3"></div>
+                <div><label class="block text-xs text-zinc-400 mb-1">Market Condition</label>
+                    <select id="condition" class="w-full bg-zinc-800 border border-zinc-700 rounded-2xl px-5 py-3">
+                        <option value="Trending">Trending</option>
+                        <option value="Ranging">Ranging</option>
+                        <option value="Volatile">Volatile</option>
+                        <option value="News Event">News Event</option>
+                    </select>
+                </div>
+                <div class="md:col-span-2"><label class="block text-xs text-zinc-400 mb-1">Indicators / Tools</label><textarea id="indicators" rows="2" placeholder="RSI > 70, EMA 50 crossover, Bollinger Band squeeze" class="w-full bg-zinc-800 border border-zinc-700 rounded-2xl px-5 py-3"></textarea></div>
+                <div class="md:col-span-2"><label class="block text-xs text-zinc-400 mb-1">Reason / Trade Setup</label><textarea id="reason" rows="3" class="w-full bg-zinc-800 border border-zinc-700 rounded-2xl px-5 py-3"></textarea></div>
+            </div>
+
+            <h3 class="text-emerald-400 text-xl font-semibold mt-10 mb-6 flex items-center gap-3"><span class="text-2xl">5️⃣</span> Psychology & Notes</h3>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div><label class="block text-xs text-zinc-400 mb-1">Emotion / Mood</label>
+                    <select id="emotion" class="w-full bg-zinc-800 border border-zinc-700 rounded-2xl px-5 py-3">
+                        <option value="Confident">Confident</option>
+                        <option value="Anxious">Anxious</option>
+                        <option value="Impulsive">Impulsive</option>
+                        <option value="Overconfident">Overconfident</option>
+                        <option value="Patient">Patient</option>
+                        <option value="Frustrated">Frustrated</option>
+                        <option value="Tired">Tired</option>
+                    </select>
+                </div>
+                <div><label class="block text-xs text-zinc-400 mb-1">Option Type</label>
+                    <select id="optionType" class="w-full bg-zinc-800 border border-zinc-700 rounded-2xl px-5 py-3">
+                        <option value="High/Low">High/Low</option>
+                        <option value="One Touch">One Touch</option>
+                        <option value="Boundary">Boundary</option>
+                        <option value="Ladder">Ladder</option>
+                    </select>
+                </div>
+                <div><label class="block text-xs text-zinc-400 mb-1">Broker / Platform</label><input type="text" id="broker" placeholder="Pocket Option" class="w-full bg-zinc-800 border border-zinc-700 rounded-2xl px-5 py-3"></div>
+            </div>
+            <div class="mt-6"><label class="block text-xs text-zinc-400 mb-1">Mistakes / Lessons</label><textarea id="mistakes" rows="3" class="w-full bg-zinc-800 border border-zinc-700 rounded-2xl px-5 py-3"></textarea></div>
+            <div class="mt-6"><label class="block text-xs text-zinc-400 mb-1">Additional Comments</label><textarea id="comments" rows="3" class="w-full bg-zinc-800 border border-zinc-700 rounded-2xl px-5 py-3"></textarea></div>
+
+            <div class="mt-8">
+                <label class="block text-xs text-zinc-400 mb-2">Chart Screenshot (optional)</label>
+                <input type="file" id="screenshot" accept="image/*" class="block w-full text-sm text-zinc-400 file:mr-4 file:py-3 file:px-6 file:rounded-2xl file:border-0 file:bg-emerald-600 file:text-white">
+            </div>
+
+            <div class="mt-12 flex gap-4">
+                <button type="submit" class="flex-1 bg-emerald-600 hover:bg-emerald-500 py-5 rounded-3xl font-semibold text-xl">Save Trade</button>
+                <button type="button" onclick="cancelEdit()" class="px-10 bg-zinc-800 hover:bg-zinc-700 rounded-3xl">Cancel</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Detail Modal -->
+<div id="modal" class="hidden fixed inset-0 bg-black/90 flex items-center justify-center z-50">
+    <div class="bg-zinc-900 rounded-3xl max-w-3xl w-full mx-4 max-h-[90vh] overflow-auto modal">
+        <div class="p-8" id="modalContent"></div>
+        <div class="sticky bottom-0 bg-zinc-900 border-t border-zinc-800 p-6 flex justify-end gap-4">
+            <button onclick="closeModal()" class="px-8 py-3 rounded-2xl bg-zinc-800 hover:bg-zinc-700">Close</button>
+            <button onclick="editCurrentModal()" class="bg-emerald-600 px-8 py-3 rounded-2xl hover:bg-emerald-500">Edit Trade</button>
+        </div>
+    </div>
+</div>
+
+<script>
+// ====================== SUPABASE SETUP ======================
+const SUPABASE_URL  = 'https://qpewbmuginvywiruojwo.supabase.co';
+const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFwZXdibXVnaW52eXdpcnVvandvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzE2NjA0MjQsImV4cCI6MjA4NzIzNjQyNH0.6Obo9S6C601WDFnLKUU_jnJFy2JTn3dNQCvvh1IFHdU';
+const db = supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
+
+// ====================== GLOBALS ======================
+let trades = [];
+let startingBalance = 0;
+let currentEditId = null;
+let charts = {};
+
+// ====================== HELPERS ======================
+function showToast(msg, type = 'success') {
+    const t = document.createElement('div');
+    t.className = `toast ${type === 'success' ? 'bg-emerald-700' : 'bg-red-700'} text-white shadow-xl`;
+    t.textContent = msg;
+    document.body.appendChild(t);
+    setTimeout(() => t.remove(), 3500);
+}
+
+function setLoading(show, text = 'Loading...') {
+    document.getElementById('loadingText').textContent = text;
+    document.getElementById('loadingOverlay').style.display = show ? 'flex' : 'none';
+}
+
+// ====================== LOAD DATA ======================
+async function loadData() {
+    setLoading(true, 'Connecting to Supabase...');
+    try {
+        const { data: settings } = await db
+            .from('journal_settings')
+            .select('value')
+            .eq('key', 'starting_balance')
+            .maybeSingle();
+
+        startingBalance = settings ? parseFloat(settings.value) : 0;
+
+        const { data: tradesData, error } = await db
+            .from('trades')
+            .select('*')
+            .order('opened', { ascending: true });
+
+        if (error) throw error;
+        trades = tradesData || [];
+
+        document.getElementById('dbStatus').innerHTML =
+            `<span class="w-2 h-2 rounded-full bg-emerald-400 inline-block"></span> <span class="text-emerald-400">Supabase connected</span>`;
+        document.getElementById('tradeCount').textContent = `${trades.length} trades`;
+        document.getElementById('startingBalanceSection').style.display =
+            (trades.length === 0 && startingBalance === 0) ? 'block' : 'none';
+
+    } catch (err) {
+        console.error('DB error:', err);
+        document.getElementById('dbStatus').innerHTML =
+            `<span class="w-2 h-2 rounded-full bg-red-400 inline-block"></span> <span class="text-red-400">Connection failed</span>`;
+        showToast('❌ ' + err.message, 'error');
+    } finally {
+        setLoading(false);
+    }
+}
+
+// ====================== RUNNING BALANCE ======================
+function getRunningBalances() {
+    let bal = startingBalance;
+    const out = [bal];
+    trades.forEach(t => {
+        if (t.result === 'Win')       bal += t.investment * (t.payout / 100) - (t.fees || 0);
+        else if (t.result === 'Loss') bal += -t.investment - (t.fees || 0);
+        out.push(bal);
+    });
+    return out;
+}
+
+// ====================== TABS ======================
+document.querySelectorAll('.tab').forEach(btn => {
+    btn.addEventListener('click', () => {
+        document.querySelectorAll('.tab').forEach(b => b.classList.remove('tab-active'));
+        btn.classList.add('tab-active');
+        document.querySelectorAll('.tab-content').forEach(c => c.classList.add('hidden'));
+        document.getElementById(`content-${btn.dataset.tab}`).classList.remove('hidden');
+        if (btn.dataset.tab === '0') renderDashboard();
+        if (btn.dataset.tab === '1') renderTrades();
+    });
+});
+
+// ====================== SAVE TRADE ======================
+document.getElementById('tradeForm').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    setLoading(true, 'Saving trade...');
+    try {
+        // First trade — save starting balance
+        if (trades.length === 0 && startingBalance === 0) {
+            const val = parseFloat(document.getElementById('startingBalance').value);
+            if (isNaN(val) || val < 0) { setLoading(false); return alert('Enter a valid starting balance'); }
+            startingBalance = val;
+            await db.from('journal_settings').upsert({ key: 'starting_balance', value: String(val) }, { onConflict: 'key' });
+        }
+
+        const opened = document.getElementById('opened').value;
+        if (!opened) { setLoading(false); return alert('Opened time is required'); }
+
+        const expiryMin = parseInt(document.getElementById('expiry').value);
+        const closed    = new Date(new Date(opened).getTime() + expiryMin * 60000).toISOString();
+        const investment = parseFloat(document.getElementById('investment').value);
+        const payout     = parseFloat(document.getElementById('payout').value);
+        const result     = document.getElementById('result').value;
+        const fees       = parseFloat(document.getElementById('fees').value) || 0;
+        const pl = result === 'Win'  ? investment * (payout / 100) - fees
+                 : result === 'Loss' ? -investment - fees : 0;
+
+        // Handle screenshot
+        let screenshotBase64 = null;
+        const file = document.getElementById('screenshot').files[0];
+        if (file) {
+            screenshotBase64 = await new Promise(res => {
+                const r = new FileReader();
+                r.onload = () => res(r.result);
+                r.readAsDataURL(file);
+            });
+        }
+
+        const trade = {
+            trade_id:    currentEditId || ('BO-' + Date.now().toString(36).toUpperCase()),
+            opened, closed, expiry: expiryMin,
+            asset:       document.getElementById('asset').value.toUpperCase(),
+            direction:   document.getElementById('direction').value,
+            entry:       parseFloat(document.getElementById('entry').value) || null,
+            exit_price:  parseFloat(document.getElementById('exit').value) || null,
+            investment, payout, result, fees, pl,
+            strategy:    document.getElementById('strategy').value || null,
+            indicators:  document.getElementById('indicators').value || null,
+            reason:      document.getElementById('reason').value || null,
+            condition:   document.getElementById('condition').value,
+            session:     document.getElementById('session').value,
+            emotion:     document.getElementById('emotion').value,
+            option_type: document.getElementById('optionType').value,
+            broker:      document.getElementById('broker').value || null,
+            mistakes:    document.getElementById('mistakes').value || null,
+            comments:    document.getElementById('comments').value || null,
+            screenshot:  screenshotBase64
+        };
+
+        if (currentEditId) {
+            const { error } = await db.from('trades').update(trade).eq('trade_id', currentEditId);
+            if (error) throw error;
+            const idx = trades.findIndex(t => t.trade_id === currentEditId);
+            if (idx !== -1) trades[idx] = trade;
+        } else {
+            const { data, error } = await db.from('trades').insert(trade).select().single();
+            if (error) throw error;
+            trades.push(data);
+        }
+
+        document.getElementById('tradeCount').textContent = `${trades.length} trades`;
+        document.getElementById('startingBalanceSection').style.display = 'none';
+        showToast('✅ Trade saved!');
+        cancelEdit();
+        document.querySelector('[data-tab="1"]').click();
+
+    } catch (err) {
+        console.error(err);
+        showToast('❌ ' + err.message, 'error');
+    } finally {
+        setLoading(false);
+    }
+});
+
+function cancelEdit() {
+    currentEditId = null;
+    document.getElementById('tradeForm').reset();
+    document.getElementById('expiry').value  = 5;
+    document.getElementById('payout').value  = 80;
+    document.getElementById('fees').value    = 0;
+}
+
+// ====================== RENDER TABLE ======================
+function renderTrades() {
+    const tbody = document.getElementById('tableBody');
+    tbody.innerHTML = '';
+    const term = document.getElementById('search').value.toLowerCase().trim();
+    const filtered = trades.filter(t =>
+        t.asset.toLowerCase().includes(term) || (t.trade_id||'').toLowerCase().includes(term)
+    );
+    const runBal = getRunningBalances();
+    filtered.sort((a,b) => new Date(b.opened) - new Date(a.opened));
+    filtered.forEach(t => {
+        const origIdx = trades.findIndex(x => x.trade_id === t.trade_id);
+        const curBal  = runBal[origIdx + 1] ?? startingBalance;
+        const row = document.createElement('tr');
+        row.className = 'hover:bg-zinc-800 transition-colors';
+        row.innerHTML = `
+            <td class="p-5 font-mono text-xs text-zinc-400">${t.trade_id}</td>
+            <td class="p-5">${new Date(t.opened).toLocaleString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})}</td>
+            <td class="p-5 font-medium">${t.asset}</td>
+            <td class="p-5">${t.direction}</td>
+            <td class="p-5">${t.expiry} min</td>
+            <td class="p-5"><span class="px-4 py-1 rounded-full text-xs ${t.result==='Win'?'bg-emerald-900 text-emerald-300':t.result==='Loss'?'bg-red-900 text-red-300':'bg-yellow-900 text-yellow-300'}">${t.result}</span></td>
+            <td class="p-5 text-right font-bold ${t.pl>=0?'text-emerald-400':'text-red-400'}">$${parseFloat(t.pl).toFixed(2)}</td>
+            <td class="p-5 text-right font-medium ${curBal>=startingBalance?'text-emerald-400':'text-red-400'}">$${curBal.toFixed(2)}</td>
+            <td class="p-5">${t.session}</td>
+            <td class="p-5">
+                <button onclick="viewTrade('${t.trade_id}')" class="mr-3 text-blue-400 hover:text-blue-300" title="View">👁</button>
+                <button onclick="editTrade('${t.trade_id}')" class="mr-3 text-amber-400 hover:text-amber-300" title="Edit">✏</button>
+                <button onclick="deleteTrade('${t.trade_id}')" class="text-red-400 hover:text-red-300" title="Delete">🗑</button>
+            </td>`;
+        tbody.appendChild(row);
+    });
+}
+
+// ====================== VIEW / EDIT / DELETE ======================
+function viewTrade(id) {
+    const t = trades.find(x => x.trade_id === id);
+    if (!t) return;
+    document.getElementById('modalContent').innerHTML = `
+        <div class="space-y-8">
+            <div class="flex justify-between items-start">
+                <div><div class="font-mono text-xs text-zinc-500">${t.trade_id}</div><div class="text-3xl font-bold">${t.asset} ${t.direction}</div></div>
+                <div class="text-right"><div class="text-4xl font-bold ${t.pl>=0?'text-emerald-400':'text-red-400'}">$${parseFloat(t.pl).toFixed(2)}</div><div class="text-sm">${t.result}</div></div>
+            </div>
+            <div class="grid grid-cols-2 gap-6 text-sm">
+                <div><span class="text-zinc-400">Opened:</span> ${new Date(t.opened).toLocaleString()}</div>
+                <div><span class="text-zinc-400">Closed:</span> ${new Date(t.closed).toLocaleString()}</div>
+                <div><span class="text-zinc-400">Session:</span> ${t.session}</div>
+                <div><span class="text-zinc-400">Emotion:</span> ${t.emotion}</div>
+                <div><span class="text-zinc-400">Option Type:</span> ${t.option_type}</div>
+                <div><span class="text-zinc-400">Broker:</span> ${t.broker||'-'}</div>
+            </div>
+            ${t.screenshot?`<img src="${t.screenshot}" class="rounded-2xl border border-zinc-700 max-w-full">`:''}
+            <div class="bg-zinc-800 rounded-2xl p-6 space-y-4 text-sm">
+                <div><strong>Reason:</strong> ${t.reason||'-'}</div>
+                <div><strong>Strategy:</strong> ${t.strategy||'-'}</div>
+                <div><strong>Indicators:</strong> ${t.indicators||'-'}</div>
+                <div><strong>Lessons:</strong> ${t.mistakes||'-'}</div>
+                <div><strong>Comments:</strong> ${t.comments||'-'}</div>
+            </div>
+        </div>`;
+    document.getElementById('modal').classList.remove('hidden');
+    window.currentModalId = id;
+}
+
+function closeModal() { document.getElementById('modal').classList.add('hidden'); }
+function editCurrentModal() { closeModal(); editTrade(window.currentModalId); }
+
+function editTrade(id) {
+    const t = trades.find(x => x.trade_id === id);
+    if (!t) return;
+    currentEditId = id;
+    document.getElementById('opened').value    = (t.opened||'').slice(0,16);
+    document.getElementById('expiry').value     = t.expiry;
+    document.getElementById('asset').value      = t.asset;
+    document.getElementById('direction').value  = t.direction;
+    document.getElementById('session').value    = t.session||'London';
+    document.getElementById('entry').value      = t.entry||'';
+    document.getElementById('exit').value       = t.exit_price||'';
+    document.getElementById('investment').value = t.investment;
+    document.getElementById('payout').value     = t.payout;
+    document.getElementById('result').value     = t.result;
+    document.getElementById('fees').value       = t.fees||0;
+    document.getElementById('strategy').value   = t.strategy||'';
+    document.getElementById('indicators').value = t.indicators||'';
+    document.getElementById('reason').value     = t.reason||'';
+    document.getElementById('condition').value  = t.condition||'Trending';
+    document.getElementById('emotion').value    = t.emotion||'Confident';
+    document.getElementById('optionType').value = t.option_type||'High/Low';
+    document.getElementById('broker').value     = t.broker||'';
+    document.getElementById('mistakes').value   = t.mistakes||'';
+    document.getElementById('comments').value   = t.comments||'';
+    document.querySelector('[data-tab="2"]').click();
+}
+
+async function deleteTrade(id) {
+    if (!confirm('Delete this trade permanently?')) return;
+    setLoading(true, 'Deleting...');
+    try {
+        const { error } = await db.from('trades').delete().eq('trade_id', id);
+        if (error) throw error;
+        trades = trades.filter(t => t.trade_id !== id);
+        document.getElementById('tradeCount').textContent = `${trades.length} trades`;
+        renderTrades(); renderDashboard();
+        showToast('🗑 Trade deleted');
+    } catch (err) {
+        showToast('❌ ' + err.message, 'error');
+    } finally { setLoading(false); }
+}
+
+async function clearAllTrades() {
+    if (!confirm('⚠️ CLEAR ALL TRADES AND RESET BALANCE? This cannot be undone.')) return;
+    setLoading(true, 'Clearing...');
+    try {
+        await db.from('trades').delete().neq('trade_id', '');
+        await db.from('journal_settings').delete().eq('key', 'starting_balance');
+        trades = []; startingBalance = 0;
+        document.getElementById('tradeCount').textContent = '0 trades';
+        document.getElementById('startingBalanceSection').style.display = 'block';
+        renderTrades(); renderDashboard();
+        showToast('✅ All data cleared');
+    } catch (err) {
+        showToast('❌ ' + err.message, 'error');
+    } finally { setLoading(false); }
+}
+
+// ====================== EXPORT CSV ======================
+function exportCSV() {
+    if (!trades.length) return alert('No trades to export');
+    let csv = 'ID,Opened,Closed,Asset,Direction,Expiry,Entry,Exit,Investment,Payout,Result,PL,Fees,Session,Strategy,Emotion,OptionType,Broker\n';
+    trades.forEach(t => {
+        csv += `"${t.trade_id}","${t.opened}","${t.closed}","${t.asset}","${t.direction}",${t.expiry},${t.entry||''},${t.exit_price||''},${t.investment},${t.payout},${t.result},${t.pl},${t.fees||0},"${t.session}","${t.strategy||''}","${t.emotion}","${t.option_type}","${t.broker||''}"\n`;
+    });
+    const a = Object.assign(document.createElement('a'), {
+        href: URL.createObjectURL(new Blob([csv],{type:'text/csv'})),
+        download: `Binary-Journal-${new Date().toISOString().slice(0,10)}.csv`
+    });
+    a.click();
+}
+
+// ====================== DASHBOARD ======================
+function renderDashboard() {
+    const total   = trades.length;
+    const wins    = trades.filter(t=>t.result==='Win').length;
+    const losses  = trades.filter(t=>t.result==='Loss').length;
+    const ties    = trades.filter(t=>t.result==='Tie').length;
+    const winrate = total ? (wins/total*100).toFixed(1) : 0;
+    const netPL   = trades.reduce((a,t)=>a+parseFloat(t.pl||0),0);
+    const finBal  = startingBalance + netPL;
+    const avgDur  = total ? (trades.reduce((a,t)=>a+t.expiry,0)/total).toFixed(0) : 0;
+
+    document.getElementById('stat-total').textContent    = total;
+    document.getElementById('stat-winrate').textContent  = winrate + '%';
+    document.getElementById('stat-pl').textContent       = '$' + netPL.toFixed(2);
+    document.getElementById('stat-pl').className         = `text-5xl font-bold mt-3 ${netPL>=0?'text-emerald-400':'text-red-400'}`;
+    document.getElementById('stat-avg').textContent      = avgDur + ' min';
+    document.getElementById('stat-balance').textContent  = '$' + finBal.toFixed(2);
+    document.getElementById('stat-balance').className    = `text-5xl font-bold mt-3 ${finBal>=startingBalance?'text-emerald-400':'text-red-400'}`;
+
+    const sorted = [...trades].sort((a,b)=>new Date(a.opened)-new Date(b.opened));
+    let cum = startingBalance;
+    const cumData = [startingBalance, ...sorted.map(t=>{cum+=parseFloat(t.pl||0);return cum;})];
+
+    if (charts.cum)     charts.cum.destroy();
+    if (charts.pie)     charts.pie.destroy();
+    if (charts.session) charts.session.destroy();
+
+    charts.cum = new Chart(document.getElementById('cumulativeChart'), {
+        type: 'line',
+        data: { labels: ['Start',...sorted.map((_,i)=>i+1)], datasets:[{label:'Balance',data:cumData,borderColor:'#10b981',tension:0.4,borderWidth:3,fill:false,pointRadius:3}] },
+        options: { plugins:{legend:{display:false}}, scales:{y:{grid:{color:'#27272a'},ticks:{color:'#a1a1aa'}},x:{ticks:{color:'#a1a1aa'}}} }
+    });
+    charts.pie = new Chart(document.getElementById('pieChart'), {
+        type: 'doughnut',
+        data: { labels:['Wins','Losses','Ties'], datasets:[{data:[wins,losses,ties],backgroundColor:['#10b981','#ef4444','#eab308'],borderWidth:0}] },
+        options: { cutout:'65%', plugins:{legend:{labels:{color:'#a1a1aa'}}} }
+    });
+    const sessions={};
+    trades.forEach(t=>{const s=t.session||'Other';sessions[s]=(sessions[s]||0)+1;});
+    charts.session = new Chart(document.getElementById('sessionChart'),{
+        type:'bar',
+        data:{labels:Object.keys(sessions),datasets:[{label:'Trades',data:Object.values(sessions),backgroundColor:'#10b981',borderRadius:8}]},
+        options:{scales:{y:{ticks:{stepSize:1,color:'#a1a1aa'},grid:{color:'#27272a'}},x:{ticks:{color:'#a1a1aa'}}}}
+    });
+}
+
+// ====================== INIT ======================
+loadData().then(() => document.querySelector('[data-tab="0"]').click());
+</script>
+</body>
+</html>
